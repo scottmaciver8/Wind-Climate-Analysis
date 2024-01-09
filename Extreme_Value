@@ -1,0 +1,360 @@
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.stats import linregress
+
+plt.rcParams['font.family'] = 'serif'
+
+csv_file = r' #ENTER FILE PATH HERE  '   #ADJUST FILE NAME TO CSV FILE
+df = pd.read_csv(csv_file)  
+print(df.columns)
+selected_columns = df[['Date','Time','Mean_Direction', 'Mean_Speed', 'Gust_Direction', 'Gust_Speed']]
+column_names = df.columns
+print(column_names)
+
+# Specify data entries as numerical and handle NaN Values.
+df['Mean_Direction'] = pd.to_numeric(df['Mean_Direction'], errors='coerce')
+df['Mean_Speed'] = pd.to_numeric(df['Mean_Speed'], errors='coerce')
+df['Gust_Direction'] = pd.to_numeric(df['Gust_Direction'], errors='coerce')
+df['Gust_Speed'] = pd.to_numeric(df['Gust_Speed'], errors='coerce')
+df['DateTime'] = df['Date'] + ' ' + df['Time']
+df['DateTime'] = pd.to_datetime(df['DateTime'], dayfirst=True)
+
+print(df['Time'].dtype)
+#Extract Year from DateTime Data
+df['Year'] = df['DateTime'].dt.year
+yearly_data = {}
+for year, group in df.groupby('Year'):
+    yearly_data[year] = group
+    
+# Maximal All Direction Wind Speeds for Each Year in the Dataset    
+yearly_summary = df.groupby('Year').agg({
+    'Gust_Speed': 'max',
+    'Mean_Speed': 'max'
+}).reset_index()
+yearly_summary = yearly_summary.rename(columns={
+    'Gust_Speed': 'Max_Gust_Speed',
+    'Mean_Speed': 'Max_Mean_Speed'
+})
+print(yearly_summary)
+
+# Maximal Sector Wind Speeds for Each Year in the Dataset
+direction_ranges = [
+    ('N-NE', 0, 45), ('NE-E', 45, 90), ('E-SE', 90, 135), ('SE-S', 135, 180),
+    ('S-SW', 180, 225), ('SW-W', 225, 270), ('W-NW', 270, 315), ('NW-N', 315, 360)
+] # Identify Direction Sectors
+def map_direction_sector(mean_direction):
+    for sector, start, end in direction_ranges:
+        if start <= mean_direction < end:
+            return sector
+    return 'Unknown'  
+# Map the direction sectors and calculate the maximum gust speed and mean speed
+df['Direction_Sector'] = df['Mean_Direction'].apply(map_direction_sector)
+df = df[df['Direction_Sector'] != 'Unknown']
+yearly_direction_summary = df.groupby(['Year', 'Direction_Sector']).agg({
+    'Gust_Speed': 'max',
+    'Mean_Speed': 'max'
+}).reset_index()
+yearly_direction_summary = yearly_direction_summary.rename(columns={
+    'Gust_Speed': 'Max_Gust_Speed',
+    'Mean_Speed': 'Max_Mean_Speed'
+})
+print(yearly_direction_summary)
+
+# Sorting Maxima Data from Lowest to Highest==================================================================================================================================
+# ALL DIRECTIONS
+sorted_all_direction_max_mean = yearly_summary.sort_values(by='Max_Mean_Speed')
+sorted_all_direction_max_gust = yearly_summary.sort_values(by='Max_Gust_Speed')
+print("\nSorted All-Direction Mean Speed:")
+print(sorted_all_direction_max_mean)
+#print("\nSorted All-Direction Gust Speed:")
+print(sorted_all_direction_max_gust)
+# SECTORS
+sorted_sector_max_mean = yearly_direction_summary.groupby('Direction_Sector').apply(lambda x: x.sort_values('Max_Mean_Speed'))
+sorted_sector_max_gust = yearly_direction_summary.groupby('Direction_Sector').apply(lambda x: x.sort_values('Max_Gust_Speed'))
+print("Sorted Sector Mean Speed:")
+print(sorted_sector_max_mean)
+#print("\nSorted Sector Gust Speed:")
+print(sorted_sector_max_gust)
+
+sorted_all_direction_max_mean = sorted_all_direction_max_mean.reset_index(drop=True)
+sorted_all_direction_max_gust = sorted_all_direction_max_gust.reset_index(drop=True)
+
+num_variables_all_mean = sorted_all_direction_max_mean.shape[0]
+num_variables_all_gust = sorted_all_direction_max_gust.shape[0]
+
+indexed_all_mean = list(range(1, num_variables_all_mean + 1))
+indexed_all_gust = list(range(1, num_variables_all_gust + 1))
+
+# Calculation of the Reduced Variate for All-Direction Wind Measurements====================================================================================
+#Number of Entries in Dataset
+N_all_mean = num_variables_all_mean
+N_all_gust = num_variables_all_gust
+# Probability of Non Exceedence (p) 
+p_all_mean = [m / (N_all_mean + 1) for m in indexed_all_mean]
+p_all_gust = [m / (N_all_gust + 1) for m in indexed_all_gust]
+# Reduced Variate (y) 
+y_all_mean = [-np.log(-np.log(p)) for p in p_all_mean]
+y_all_gust = [-np.log(-np.log(p)) for p in p_all_gust]
+
+# Calculation of the Reduced Variate for Sector Wind Measurements====================================================================================
+# Arranging Sector Sorted Terms and Applying an Index m 
+sorted_sector_max_mean = sorted_sector_max_mean.reset_index(drop=True)
+sorted_sector_max_gust = sorted_sector_max_gust.reset_index(drop=True)
+num_variables_sector_mean = sorted_sector_max_mean.groupby('Direction_Sector').size()
+num_variables_sector_gust = sorted_sector_max_gust.groupby('Direction_Sector').size()
+indexed_sector_max_mean = {}
+indexed_sector_max_gust = {}
+for sector, num_vars in num_variables_sector_mean.items():
+    indexed_sector_max_mean[sector] = list(range(1, num_vars + 1))
+for sector, num_vars in num_variables_sector_gust.items():
+    indexed_sector_max_gust[sector] = list(range(1, num_vars + 1))
+
+# Calculation of the Probability of Non Exceedence (p) for the data-sets corresponding to Each Sector
+p_sector_mean = {}
+for sector, indices in indexed_sector_max_mean.items():
+    N = num_variables_sector_mean[sector]
+    p_sector_mean[sector] = [m / (N + 1) for m in indices]
+p_sector_gust = {}
+for sector, indices in indexed_sector_max_gust.items():
+    N = num_variables_sector_gust[sector]
+    p_sector_gust[sector] = [m / (N + 1) for m in indices]
+
+# Calculation of the Reduced Variate (y) for the data-sets corresponding to Each Sector
+y_sector_mean = {}
+for sector, probabilities in p_sector_mean.items():
+    y_sector_mean[sector] = [-np.log(-np.log(p)) for p in probabilities]
+y_sector_gust = {}
+for sector, probabilities in p_sector_gust.items():
+    y_sector_gust[sector] = [-np.log(-np.log(p)) for p in probabilities]
+
+#Calculation of Cumulative Extreme Value Distribution for All Directions========================================================================================================================
+U_R_maxima_mean = sorted_all_direction_max_mean['Max_Mean_Speed'].values  # Extract 'Max_Gust_Speed' column as a NumPy array
+U_R_maxima_gust = sorted_all_direction_max_gust['Max_Gust_Speed'].values  # Extract 'Max_Gust_Speed' column as a NumPy array
+
+#Plot the Reduced Variate Data against the Maxumal Wind Speeds and fit a straight line using linear regression
+slope_maxima_mean, intercept_maxima_mean, _, _, _ = linregress(y_all_mean, U_R_maxima_mean)
+slope_maxima_gust, intercept_maxima_gust, _, _, _ = linregress(y_all_gust, U_R_maxima_gust)
+#The Type I CDF Parameters are then taken from the slope and intercept of the lin.reg. analysis
+a_maxima_mean = slope_maxima_mean
+a_maxima_gust = slope_maxima_gust
+u_maxima_mean = intercept_maxima_mean
+u_maxima_gust = intercept_maxima_gust
+
+x = np.linspace(0, 75, 1000)   # Range of Windspeeds for CDF Graph
+
+#Define the Gumbel/Type I CDF Distribution
+def gumbel_pdf(x, a, u):
+    return  np.exp(-np.exp(-(x - u) / a))
+pdf_mean = gumbel_pdf(x, a_maxima_mean, u_maxima_mean)
+pdf_gust = gumbel_pdf(x, a_maxima_gust, u_maxima_gust)
+
+plt.plot(x, pdf_mean, label='Mean Extreme Wind Speed', color='black', linestyle='-')
+plt.plot(x, pdf_gust, label='Gust Extreme Wind Speed', color='red', linestyle='-')
+plt.xlabel('Wind Speed (m/s)', fontsize =12)
+plt.ylabel('Cumulative Probability Density', fontsize=12)
+plt.title('01/01/1978-20/12/2023 - All Directions')
+#plt.minorticks_on()
+plt.grid(which='both', linestyle='--', linewidth=0.5)
+plt.text(38, 0.18, f'Mean Wind: a={a_maxima_mean:.2f} u={u_maxima_mean:.2f}', fontsize=10, color='black')
+plt.text(38, 0.13, f'Gust Wind:   a={a_maxima_gust:.2f} u={u_maxima_gust:.2f}', fontsize=10, color='black')
+plt.legend()
+#plt.show()
+
+# Plot of Wind Speed vs Reduced Variate for ALL DIRECTIONS___________________________________________________________________________________________________________________
+
+fig, ax = plt.subplots(figsize=(10, 6))
+plt.xlabel('Reduced Variate (y)')
+plt.ylabel('Wind Speed (m/s)')
+plt.title('01/01/1978-20/12/2023 - All Directions - Annual Maxima Wind Speed vs Reduced Variate', pad=20)
+
+plt.scatter(y_all_mean, U_R_maxima_mean, label='Mean Wind Speed', color='black', marker='D', s=50)
+plt.scatter(y_all_gust, U_R_maxima_gust, label='Gust Wind Speed', color='red', marker='D', s=50)
+slope_mean, intercept_mean, r_value_mean, p_value_mean, std_err_mean = linregress(y_all_mean, U_R_maxima_mean)
+plt.plot(y_all_mean, slope_mean * np.array(y_all_mean) + intercept_mean, color='black')
+slope_gust, intercept_gust, r_value_gust, p_value_gust, std_err_gust = linregress(y_all_gust, U_R_maxima_gust)
+plt.plot(y_all_gust, slope_gust * np.array(y_all_gust) + intercept_gust, color='red')
+equation_mean = f'y = {slope_mean:.2f}x + {intercept_mean:.2f}\nR² = {r_value_mean**2:.4f}'
+equation_gust = f'y = {slope_gust:.2f}x + {intercept_gust:.2f}\nR² = {r_value_gust**2:.4f}'
+
+ax.spines['left'].set_color('none')
+ax.spines['top'].set_color('none')
+ax.spines['right'].set_position('zero')
+ax.yaxis.set_ticks_position('right')
+ax.spines['right'].set_color('black')
+ax.spines['right'].set_linewidth(0.75)
+ax.spines['bottom'].set_position('zero')
+ax.yaxis.set_ticks_position('right')
+ax.spines['bottom'].set_color('black')
+ax.spines['bottom'].set_linewidth(0.75)
+
+plt.ylabel('Annual Maxima Wind Speed (m/s)', fontsize =12)
+plt.xlabel('Reduced Variate (Gumbel)', fontsize=12)
+xticks = np.arange(-1, 5.5, 1)  
+yticks = np.arange(0, 75, 5)
+plt.xticks(xticks)
+plt.yticks(yticks)
+plt.legend(loc='lower right')
+plt.grid(True)
+#plt.show()
+
+# Calculation of Cumulative Extreme Value Distribution for each Sector ==================================================================================
+sector_data_mean = {}
+for sector, sector_data in sorted_sector_max_mean.groupby('Direction_Sector'):
+  max_mean_speed = sector_data['Max_Mean_Speed'].values
+  sector_data_mean[sector] = max_mean_speed
+
+sector_data_gust = {}
+for sector, sector_data in sorted_sector_max_gust.groupby('Direction_Sector'):
+   max_gust_speed = sector_data['Max_Gust_Speed'].values
+   sector_data_gust[sector] = max_gust_speed
+   
+a_sector_mean = {}
+a_sector_gust = {}
+u_sector_mean = {}
+u_sector_gust = {}
+
+# Loop through each sector
+for sector, max_mean_speed in sector_data_mean.items():
+    y_sector_mean = [-np.log(-np.log(p)) for p in p_sector_mean[sector]]
+    slope_mean, intercept_mean, _, _, _ = linregress(y_sector_mean, max_mean_speed)
+    a_sector_mean[sector] = slope_mean
+    u_sector_mean[sector] = intercept_mean
+    
+for sector, max_gust_speed in sector_data_gust.items():
+    y_sector_gust = [-np.log(-np.log(p)) for p in p_sector_gust[sector]]
+    slope_gust, intercept_gust, _, _, _ = linregress(y_sector_gust, sector_data_gust[sector])
+    a_sector_gust[sector] = slope_gust
+    u_sector_gust[sector] = intercept_gust
+
+x = np.linspace(0, 70, 1000)  # Range of wind speeds for CDF graph
+
+# Define the Gumbel/Type I CDF Distribution
+def gumbel_pdf_mean(x, a, u):
+    return np.exp(-np.exp(-(x - u) / a))
+def gumbel_pdf_gust(x, a, u):
+    return np.exp(-np.exp(-(x - u) / a))
+
+fig, axs = plt.subplots(1, 2, figsize=(16, 6))
+ax = axs[0]
+ax.set_xlabel('Wind Speed (m/s)', fontsize=12)
+ax.set_ylabel('Cumulative Probability Density', fontsize=12)
+ax.set_title('Cumulative Probability Density of Extreme Annual Mean Wind Speeds')
+
+for sector, a in a_sector_mean.items():
+    pdf_mean = gumbel_pdf(x, a_sector_mean[sector], u_sector_mean[sector])
+    ax.plot(x, pdf_mean, label=f'{sector}', linestyle='-')
+
+ax.legend(loc='lower right')
+ax.grid(True)
+
+ax = axs[1]
+ax.set_xlabel('Wind Speed (m/s)', fontsize=12)
+ax.set_ylabel('Cumulative Probability Density', fontsize=12)
+ax.set_title('Cumulative Probability Density of Extreme Annual Gust Wind Speeds')
+
+for sector, a in a_sector_gust.items():
+    pdf_gust = gumbel_pdf(x, a_sector_gust[sector], u_sector_gust[sector])
+    ax.plot(x, pdf_gust, label=f'{sector}', linestyle='-')
+
+ax.legend(loc='lower right')
+ax.grid(True)
+
+plt.tight_layout()
+#plt.show()
+
+#--------------------------------------------------------------------------------------------------------------------------------------
+# Extract unique sector names
+sectors = sorted_sector_max_mean['Direction_Sector'].unique()
+
+# Create a single graph for all mean wind speed sectors
+fig, axs = plt.subplots(1, 2, figsize=(16, 6))
+ax = axs[0]
+ax.set_xlabel('Reduced Variate (y)', fontsize=12)
+ax.set_ylabel('Wind Speed (m/s)', fontsize=12)
+ax.set_title('01/01/1978-20/12/2023 - Mean Extreme Values')
+for sector in sectors:
+    sector_data_mean = sorted_sector_max_mean[sorted_sector_max_mean['Direction_Sector'] == sector]
+    U_R_sector_mean = sector_data_mean['Max_Mean_Speed'].values
+
+    ax.scatter(y_sector_mean, U_R_sector_mean, label=f'{sector} - Mean Wind Speed', marker='D', s=40)
+    
+    slope_mean, intercept_mean, r_value_mean, p_value_mean, std_err_mean = linregress(y_sector_mean, U_R_sector_mean)
+    ax.plot(y_sector_mean, slope_mean * np.array(y_sector_mean) + intercept_mean,
+            label=f'{sector} (y = {slope_mean:.2f}x + {intercept_mean:.2f}, R^2 = {r_value_mean**2:.4f})', linestyle='-')
+
+ax.axhline(0, color='black', linewidth=1)
+ax.axvline(0, color='black', linewidth=1)
+
+xticks = np.arange(-3, 5.5, 1)
+yticks = np.arange(0, 75, 5)
+ax.set_xticks(xticks)
+ax.set_yticks(yticks)
+ax.legend(loc='upper left', bbox_to_anchor=(1.2, 1.0))
+ax.grid(True)
+
+# Create a single graph for all gust wind speed sectors
+ax = axs[1]
+ax.set_xlabel('Reduced Variate (y)', fontsize=12)
+ax.set_ylabel('Wind Speed (m/s)', fontsize=12)
+ax.set_title('01/01/1978-20/12/2023 - Gust Extreme Values')
+
+for sector in sectors:
+    sector_data_gust = sorted_sector_max_gust[sorted_sector_max_gust['Direction_Sector'] == sector]
+    
+    U_R_sector_gust = sector_data_gust['Max_Gust_Speed'].values
+
+    ax.scatter(y_sector_gust, U_R_sector_gust, label=f'{sector} - Gust Wind Speed', marker='D', s=40)
+    
+    slope_gust, intercept_gust, r_value_gust, p_value_gust, std_err_gust = linregress(y_sector_gust, U_R_sector_gust)
+    ax.plot(y_sector_gust, slope_gust * np.array(y_sector_gust) + intercept_gust,
+            label=f'{sector}: (y = {slope_gust:.2f}x + {intercept_gust:.2f}, R^2 = {r_value_gust**2:.4f})', linestyle='-')
+
+ax.axhline(0, color='black', linewidth=1)
+ax.axvline(0, color='black', linewidth=1)
+
+xticks = np.arange(-3, 5.5, 1)
+yticks = np.arange(0, 75, 5)
+ax.set_xticks(xticks)
+ax.set_yticks(yticks)
+ax.legend(loc='upper left', bbox_to_anchor=(1.2, 1.0))
+ax.grid(True)
+#plt.show()
+
+
+# Calculation of Critical Wind Speeds and Return Periods for All Directions===================================================
+def return_period(wind_speed, a, u):
+    F_x = np.exp(-np.exp(-(wind_speed - u) / a))
+    return 1 / (1 - F_x)
+def wind_speed_for_return_period(return_period, a, u):
+    return u - a * np.log(-np.log(1 - 1 / return_period))
+
+# Select Parameters
+given_wind_speed_mean = 24     # MEAN: Select a wind speed to get the return period (years)
+given_wind_speed_gust = 20     # GUST: Select a wind speed to get the return period (years)
+given_return_period_mean = 1  # MEAN: Select a return period (years) to get the critical wind speed.
+given_return_period_gust = 1  # GUST: Select a return period (years) to get the critical wind speed.
+return_period_mean = return_period(given_wind_speed_mean, a_maxima_mean, u_maxima_mean)
+return_period_gust = return_period(given_wind_speed_gust, a_maxima_gust, u_maxima_gust)
+wind_speed_mean = wind_speed_for_return_period(given_return_period_mean, a_maxima_mean, u_maxima_mean)
+wind_speed_gust = wind_speed_for_return_period(given_return_period_gust, a_maxima_gust, u_maxima_gust)
+
+print(f"Return period for mean wind speed {given_wind_speed_mean} m/s: {return_period_mean:.2f} years")
+print(f"Return period for gust wind speed {given_wind_speed_gust} m/s: {return_period_gust:.2f} years")
+print(f"Wind speed for a {given_return_period_mean}-year return period (mean): {wind_speed_mean:.2f} m/s")
+print(f"Wind speed for a {given_return_period_gust}-year return period (gust): {wind_speed_gust:.2f} m/s")
+
+
+
+for sector in sectors:
+    return_period_sector_mean = return_period(given_wind_speed_mean, a_sector_mean[sector], u_sector_mean[sector])
+    wind_speed_sector_mean = wind_speed_for_return_period(given_return_period_mean, a_sector_mean[sector], u_sector_mean[sector])
+    print(f"Return period for mean wind speed {given_wind_speed_mean} m/s in {sector} sector: {return_period_sector_mean:.2f} years")
+    print(f"Wind speed for a {given_return_period_mean}-year return period in {sector} sector: {wind_speed_sector_mean:.2f} m/s")
+    
+    
+    return_period_sector_gust = return_period(given_wind_speed_gust, a_sector_gust[sector], u_sector_gust[sector])
+    wind_speed_sector_gust = wind_speed_for_return_period(given_return_period_gust, a_sector_gust[sector], u_sector_gust[sector])
+    print(f"Return period for gusting wind speed {given_wind_speed_gust} m/s in {sector} sector: {return_period_sector_gust:.2f} years")
+    print(f"Gust wind speed for a {given_return_period_gust}-year return period in {sector} sector: {wind_speed_sector_gust:.2f} m/s")
