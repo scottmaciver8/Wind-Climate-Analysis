@@ -1,0 +1,184 @@
+#==================================================== For WindRose
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from windrose import WindroseAxes
+import matplotlib.cm as cm
+import matplotlib.patches as patches
+from matplotlib import rc
+import scipy.stats as stats
+import scipy.optimize as optimize
+
+rc('font', **{'family': 'serif', 'serif': ['Palatino']})
+
+# ==========================================================WIND ROSE FROM .CSV DATA===================================================================================
+# Extract wind data from Excel .csv file, columns are assigned to the quantity which they represent.
+csv_file = r' #ENTER CSV FILE PATH HERE   '
+df = pd.read_csv(csv_file)  
+print(df.columns)
+selected_columns = df[['Date','Time','Mean_Direction', 'Mean_Speed']]
+column_names = df.columns
+print(column_names)
+# Mean wind direction and mean wind speed columns are specified as numbers. 'errors=coerce' handles NaN entries.
+df['Mean_Direction'] = pd.to_numeric(df['Mean_Direction'], errors='coerce')
+df['Mean_Speed'] = pd.to_numeric(df['Mean_Speed'], errors='coerce')
+
+df = pd.read_csv(csv_file, parse_dates={'DateTime': ['Date', 'Time']}, dayfirst=True)
+
+# Define the number of Sectors
+n_sectors = 32
+threshold = 1.0
+
+# Calm winds are defined when the wind speed is less than 2m/s, these low wind speeds are assingned a percentage of all speeds, regardless of direction.
+df['Calm'] = np.where(df['Mean_Speed'] < threshold, True, False)
+percentage_calm = (df['Calm'].sum() / len(df)) * 100
+
+# Create a wind rose chart with customized parameters
+ax = WindroseAxes.from_ax()
+cmap = cm.get_cmap('rainbow', n_sectors)  # Change colormap as desired
+ax.bar(df.loc[~df['Calm'], 'Mean_Direction'], df.loc[~df['Calm'], 'Mean_Speed'],
+       normed=True, edgecolor='white', cmap=cmap)
+
+# Add a circle in the middle of the wind rose - representing the calm wind percentage
+circle = patches.Circle((0, 0), 3, transform=ax.transData._b, color="white", fill=True, edgecolor='black', lw=1, alpha=1)
+ax.add_patch(circle)
+ax.text(0, 0, f'Calm \n {percentage_calm:.2f}%', ha='center', va='center', fontsize=13, color='black')
+plt.suptitle('Xóm Rạch Già - 01/01/1978-20/12/2023', fontsize=16, fontname='Helvetica')
+
+# Manually set labels for the compass directions and radial percentage scale
+custom_labels = ['N', 'N$\\neq$E', 'NE', 'E$\\neq$N', 'E', 'E$\\neq$S', 'SE', 'S$\\neq$E', 'S', 'S$\\neq$W', 'SW', 'W$\\neq$S', 'W', 'W$\\neq$N', 'NW', 'N$\\neq$W']
+ax.set_yticks(range(len(custom_labels)))
+ax.set_yticklabels(custom_labels, fontsize=18)
+percentage_ticks = [ 5, 10, 15, 20, 25]  # Define the percentage labels on the radial axis
+ax.set_rgrids(percentage_ticks, labels=[f'{tick}%' for tick in percentage_ticks], fontsize=14)
+
+# Display the percentage of calm winds as a legend
+ax.set_legend(title=f"Wind Speed (m/s)\nCalm Winds: {percentage_calm:.2f}%", fontsize=18, loc='lower right')
+plt.show()
+
+#=======================================================FITTING OPTIMISED WEIBULL DISTRIBUTION TO DATA===============================================================================
+direction_ranges = [
+    ('N-NE', 0, 45), ('NE-E', 45, 90), ('E-SE', 90, 135), ('SE-S', 135, 180),
+    ('S-SW', 180, 225), ('SW-W', 225, 270), ('W-NW', 270, 315), ('NW-N', 315, 360)
+]
+
+fig, axes = plt.subplots(4, 2, figsize=(7, 7))
+fig.suptitle('Xóm Rạch Già - 01/01/1978-20/12/2023', fontsize=14)  # Add the wind station name as the title
+plt.subplots_adjust(hspace=2)
+legend_patches = []
+weibull_shape = []
+weibull_scale = []
+for i, (label, dir_min, dir_max) in enumerate(direction_ranges):
+    
+    # Filter the data for the current direction range
+    subset = df[(df['Mean_Direction'] >= dir_min) & (df['Mean_Direction'] < dir_max)]
+    mean_speed_data = subset['Mean_Speed'].dropna()
+
+    # Fit a Weibull distribution to the data for each direction
+    def weibull_neg_log_likelihood(params, data):
+        shape, scale = params
+        log_likelihood = -np.sum(np.log(stats.weibull_min.pdf(data, c=shape, scale=scale) + 1e-9))
+        return log_likelihood
+
+    initial_guess = [2, 2] #Initial Guess is abritrary, 2 represents a Raleigh Dist.
+    result = optimize.minimize(weibull_neg_log_likelihood, initial_guess, args=(mean_speed_data,))
+    fitted_shape, fitted_scale = result.x
+    print (fitted_shape)
+    weibull_shape.append(fitted_shape)    #Used for Q-Q Plots
+    weibull_scale.append(fitted_scale)
+    
+    # Create a histogram
+    n_bins = 50
+    hist, bin_edges = np.histogram(mean_speed_data, bins=n_bins, density=True)
+    bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
+
+    # Plot the histogram in the corresponding subplot
+    row, col = i // 2, i % 2
+    axes[row, col].bar(bin_centers, hist, width=bin_edges[1] - bin_edges[0], edgecolor='black', color='silver', alpha=0.75)
+    axes[row, col].set_xlabel('Wind Speed (m/s)', fontsize=10)
+    axes[row, col].set_ylabel('Probability Density', fontsize=10)
+    axes[row, col].set_title(f'{label} ({dir_min}° - {dir_max}°)', fontsize=12)
+
+    # Overlay the Weibull PDF 
+    x = np.linspace(0, mean_speed_data.max(), 50000)
+    weibull_pdf = stats.weibull_min.pdf(x, c=fitted_shape, scale=fitted_scale)
+    axes[row, col].plot(x, weibull_pdf, 'k-', lw=2)
+    annotation_text = f'c = {fitted_shape:.2f}\na = {fitted_scale:.2f}'
+    xticks = np.arange(0, 10, 1)  
+
+    axes[row, col].annotate(
+        annotation_text, (0.75, 0.2), xycoords='axes fraction', fontsize=8,
+        bbox=dict(boxstyle="round", edgecolor="black", facecolor="white")
+    )
+
+legend_patches = [
+    plt.Line2D([0], [0], color='black', lw=2, label='Weibull Probability Density Function'),
+    plt.Line2D([0], [0], color='silver', label='Histogram Distribution')
+]
+axes[row, col].grid(True)
+plt.legend(handles=legend_patches, loc='center', bbox_to_anchor=(-0.35, -1), fontsize=12, ncol=2)
+plt.show()
+#==============================================================Q-Q Plots=================================================================================================================
+
+
+fig, axes = plt.subplots(4, 2, figsize=(8, 8))
+fig.suptitle('Xóm Rạch Già - 01/01/1978-20/12/2023 - QQ Plots', fontsize=14)
+plt.subplots_adjust(hspace=1.5)
+legend_patches = []
+
+for i, (label, dir_min, dir_max) in enumerate(direction_ranges):
+    subset = df[(df['Mean_Direction'] >= dir_min) & (df['Mean_Direction'] < dir_max)]    
+    mean_speed_data = subset['Mean_Speed'].dropna()
+    
+
+    # Theoretical Values from Weibull Distributions
+    theoretical_quantiles = stats.weibull_min.ppf(np.linspace(0.001, 0.99999, len(mean_speed_data)), c=weibull_shape[i], scale=weibull_scale[i])
+    sorted_observed_data = np.sort(mean_speed_data)
+
+    # Plot the QQ plot in the corresponding subplot
+    row, col = i // 2, i % 2
+    axes[row, col].scatter(theoretical_quantiles, sorted_observed_data, s=10, c='k', alpha=0.7)
+    axes[row, col].set_xlabel('Weibull Estimated Wind Speed (m/s)', fontsize=10)
+    axes[row, col].set_ylabel('Measurement (m/s)', fontsize=10)
+    axes[row, col].set_title(f'{label} ({dir_min}° - {dir_max}°)', fontsize=12)
+
+    # Calculate the line of best fit for the QQ plot
+    slope, intercept, r_value, p_value, std_err = stats.linregress(theoretical_quantiles, sorted_observed_data)
+    fit_line = slope * theoretical_quantiles + intercept
+
+    # Display the linear equation and R-squared value
+    r_squared = r_value**2
+    annotation_text = f'y = {slope:.6f}x + {intercept:.6f}\nR² = {r_squared:.4f}'
+    axes[row, col].annotate(
+        annotation_text, (0.02, 1.2), xycoords='axes fraction', fontsize=8,
+        bbox=dict(boxstyle="round", edgecolor="black", facecolor="white")
+    )
+    axes[row, col].plot(theoretical_quantiles, fit_line, 'r-', lw=2)
+    axes[row, col].grid(True)
+plt.legend(handles=legend_patches, loc='center', bbox_to_anchor=(0.5, -0.1), fontsize=12, ncol=2)
+plt.show()
+
+#========================================================================================================================================================================================
+def is_in_sector(direction, sector_start, sector_end):
+    if sector_start <= direction < sector_end:
+        return True
+    return False
+
+# Sectors and their corresponding angular ranges
+sectors = [('E-SE', 90, 135), ('SE-S', 135, 180), ('W-NW', 270, 315), ('NW-N', 315, 360)]
+
+# Count of occurrences with mean wind speed greater than 10 m/s
+occurrences = {'E-SE': 0, 'SE-S': 0, 'W-NW': 0, 'NW-N': 0}
+
+# Extract maximum wind speeds and count occurrences
+for sector, sector_start, sector_end in sectors:
+    sector_data = csv_file[csv_file['direction'].apply(lambda x: is_in_sector(x, sector_start, sector_end))]
+    max_speed = sector_data['speed'].max()
+    occurrences[sector] = len(sector_data[sector_data['speed'] > 10])
+    
+    print(f"Maximum wind speed in {sector}: {max_speed} m/s")
+    print(f"Occurrences with mean wind speed > 10 m/s: {occurrences[sector]}")
+
+# Total occurrences
+total_occurrences = sum(occurrences.values())
+print(f"Total occurrences with mean wind speed > 10 m/s: {total_occurrences}")
